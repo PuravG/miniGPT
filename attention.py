@@ -99,9 +99,12 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(n_embd, n_embd)
 
     def forward(self, x):
-        return torch.cat([h(x) for h in self.heads], dim=-1)
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.proj(out)
+        return out
 
 
 class FeedForward(nn.Module):
@@ -109,8 +112,9 @@ class FeedForward(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd),
+            nn.Linear(n_embd, 4 * n_embd), # from attention is all you need paper, they keep the internal dim as 4x
             nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd) # projection layer going back into the residual pathway
         )
     
     def forward(self, x):
@@ -127,8 +131,11 @@ class Block(nn.Module):
         self.ffwd = FeedForward(n_embd)
     
     def forward(self, x):
-        x = self.sa(x)
-        x = self.ffwd(x)
+        x = x + self.sa(x)
+        x = x + self.ffwd(x)
+        # for these 2 lines, we are creating some residual connections. What that does is it allows the gradient
+        # to skip some connections in backprop essentially creating a superhighway for the gradient to reach
+        # all the way deeper into the network. Solves the vanishing gradient problem a bit.
         return x
 
 # super simple bigram model
@@ -153,8 +160,7 @@ class BigramLanguageModel(nn.Module):
         token_embd = self.token_embedding_table(idx) # (B,T,C)
         pos_embd = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
         x = token_embd + pos_embd # (B,T,C)
-        x = self.sa_heads(x) # apply one head of self-attention. (B,T,C)
-        x = self.ffwd(x) # (B,T,C)
+        x = self.blocks(x) # apply transformer blocks. (B,T,C)
         logits = self.lm_head(x) # (B,T,vocab_size)
 
         if targets is None:
