@@ -3,16 +3,18 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 # hyperparameters
-batch_size = 32
-block_size = 8
-max_iters = 4500
-eval_interval = 300
-learning_rate = 1e-3
+batch_size = 64 # how many independent sequences will we process in parallel?
+block_size = 256 # what is the maximum context length for predictions?
+max_iters = 5000
+eval_interval = 500
+learning_rate = 3e-4
 device = 'mps' if torch.mps.is_available() else 'cpu'
-print(device)
+print(f"Device being used to train is {device}")
 eval_iters = 200
-n_embd = 32
-
+n_embd = 384 # every head is 384/6 so 64 dimensions
+n_head = 6
+n_layer = 6
+dropout = 0.2
 
 # ---------------------------------------
 
@@ -22,13 +24,11 @@ torch.manual_seed(1337)
 with open('input.txt', 'r') as f:
     text = f.read()
 print(f'Length of characters in the text {len(text)}')
-print(text[:100])
 
 # making a set of the characters and then creating the entire character level vocab for this text
 characters = sorted(list(set(text)))
 vocab_size = len(characters)
-print(''.join(characters))
-print(vocab_size)
+print(f'Vocab size used in our model is {vocab_size}')
 # creating a mapping from characters to integers
 stoi = {ch:i for i,ch in enumerate(characters)}
 itos = {i:ch for i,ch in enumerate(characters)}
@@ -78,6 +78,8 @@ class Head(nn.Module):
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
 
+        self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
         B, T, C = x.shape
         k = self.key(x)   # (B,T,C)
@@ -86,6 +88,7 @@ class Head(nn.Module):
         wei = q @ k.transpose(-2, -1) * C**-0.5 # (B,T,C) @ (B,C,T) --> (B,T,T)
         wei = wei.masked_fill(self.tril[:T,:T] == 0, float('-inf')) # (B,T,T)
         wei = F.softmax(wei, dim=-1) # (B,T,T)
+        wei = self.dropout(wei)
         
         # perform the weighted aggregation of the values
         v = self.value(x) # (B,T,C)
@@ -100,10 +103,11 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         self.proj = nn.Linear(n_embd, n_embd)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.proj(out)
+        out = self.dropout(self.proj(out))
         return out
 
 
@@ -114,7 +118,8 @@ class FeedForward(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(n_embd, 4 * n_embd), # from attention is all you need paper, they keep the internal dim as 4x
             nn.ReLU(),
-            nn.Linear(4 * n_embd, n_embd) # projection layer going back into the residual pathway
+            nn.Linear(4 * n_embd, n_embd), # projection layer going back into the residual pathway
+            nn.Dropout(dropout)
         )
     
     def forward(self, x):
@@ -129,10 +134,15 @@ class Block(nn.Module):
         head_size = n_embd // n_head
         self.sa = MultiHeadAttention(n_head, head_size)
         self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
     
     def forward(self, x):
-        x = x + self.sa(x)
-        x = x + self.ffwd(x)
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        # this is a bit of a change from the orignal attention is all you need paper
+        # over 5 years people figured out that you should add and norm before you do your computation
+
         # for these 2 lines, we are creating some residual connections. What that does is it allows the gradient
         # to skip some connections in backprop essentially creating a superhighway for the gradient to reach
         # all the way deeper into the network. Solves the vanishing gradient problem a bit.
@@ -146,11 +156,8 @@ class BigramLanguageModel(nn.Module):
         # each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        self.blocks = nn.Sequential(
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4),
-            Block(n_embd, n_head=4)
-        )
+        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd) # final layer norm
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -161,6 +168,7 @@ class BigramLanguageModel(nn.Module):
         pos_embd = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
         x = token_embd + pos_embd # (B,T,C)
         x = self.blocks(x) # apply transformer blocks. (B,T,C)
+        x = self.ln_f(x) # apply final layer norm. (B,T,C)
         logits = self.lm_head(x) # (B,T,vocab_size)
 
         if targets is None:
@@ -196,6 +204,8 @@ m = model.to(device)
 # create a PyTorch optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
+print()
+
 # train the model
 for iter in range(max_iters):
 
@@ -215,4 +225,9 @@ for iter in range(max_iters):
 
 # generate from the model
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
-print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
+
+with open("output.txt", "w") as f:
+    f.write(decode(m.generate(context, max_new_tokens=10000)[0].tolist()))
+
+# saving the model
+torch.save(m.state_dict(), "GPT_model.pt")
