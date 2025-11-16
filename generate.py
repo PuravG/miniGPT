@@ -39,16 +39,8 @@ class Generator:
         self.data_loader = DataLoader(data_config)
         self.vocab = None
         
-        # Initialize model
-        self.model = GPT(
-            vocab_size=model_config.vocab_size,
-            n_embd=model_config.embed_dim,
-            block_size=model_config.max_context,
-            n_head=model_config.num_heads,
-            n_layer=model_config.num_blocks,
-            dropout=model_config.dropout
-        )
-        self.model = self.model.to(device)
+        # Model will be initialized after vocabulary is loaded to get correct vocab_size
+        self.model = None
     
     def load_vocabulary(self) -> None:
         """Load vocabulary from data file."""
@@ -59,6 +51,20 @@ class Generator:
         
         # Load data to get vocabulary
         _, _, self.vocab = self.data_loader.load_data()
+        
+        # Update model config with actual vocab size from data
+        self.model_config.vocab_size = self.vocab.vocab_size
+        
+        # Initialize model with correct vocab_size
+        self.model = GPT(
+            vocab_size=self.model_config.vocab_size,
+            n_embd=self.model_config.embed_dim,
+            block_size=self.model_config.max_context,
+            n_head=self.model_config.num_heads,
+            n_layer=self.model_config.num_blocks,
+            dropout=self.model_config.dropout
+        )
+        self.model = self.model.to(self.device)
     
     def load_model(self) -> None:
         """
@@ -66,7 +72,11 @@ class Generator:
         
         Raises:
             FileNotFoundError: If model file doesn't exist.
+            ValueError: If model is not initialized (vocabulary not loaded).
         """
+        if self.model is None:
+            raise ValueError("Model not initialized. Call load_vocabulary() first.")
+        
         if not self.model_path.exists():
             raise FileNotFoundError(
                 f"Model file not found: {self.model_path}. "
@@ -102,6 +112,9 @@ class Generator:
         """
         if self.vocab is None:
             raise ValueError("Vocabulary not loaded. Call load_vocabulary() first.")
+        
+        if self.model is None:
+            raise ValueError("Model not initialized. Call load_vocabulary() first.")
         
         # Initialize with start tokens or zero
         if start_tokens is None:

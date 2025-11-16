@@ -42,23 +42,11 @@ class Trainer:
         # Initialize data loader
         self.data_loader = DataLoader(data_config)
         
-        # Initialize model
-        self.model = GPT(
-            vocab_size=model_config.vocab_size,
-            n_embd=model_config.embed_dim,
-            block_size=model_config.max_context,
-            n_head=model_config.num_heads,
-            n_layer=model_config.num_blocks,
-            dropout=model_config.dropout
-        )
-        self.model = self.model.to(device)
+        # Model will be initialized after data is loaded to get correct vocab_size
+        self.model = None
         
-        # Initialize optimizer
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=training_config.learning_rate,
-            weight_decay=training_config.weight_decay
-        )
+        # Optimizer will be initialized after model is created
+        self.optimizer = None
         
         # Training state
         self.train_data = None
@@ -75,6 +63,27 @@ class Trainer:
         # Load data
         self.train_data, self.val_data, self.vocab = self.data_loader.load_data()
         print(f"Data loaded: {len(self.train_data)} train samples, {len(self.val_data)} val samples")
+        
+        # Update model config with actual vocab size from data
+        self.model_config.vocab_size = self.vocab.vocab_size
+        
+        # Initialize model with correct vocab_size
+        self.model = GPT(
+            vocab_size=self.model_config.vocab_size,
+            n_embd=self.model_config.embed_dim,
+            block_size=self.model_config.max_context,
+            n_head=self.model_config.num_heads,
+            n_layer=self.model_config.num_blocks,
+            dropout=self.model_config.dropout
+        )
+        self.model = self.model.to(self.device)
+        
+        # Initialize optimizer
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.training_config.learning_rate,
+            weight_decay=self.training_config.weight_decay
+        )
     
     @torch.no_grad()
     def estimate_loss(self) -> Dict[str, float]:
@@ -84,6 +93,9 @@ class Trainer:
         Returns:
             Dictionary with 'train' and 'val' loss values.
         """
+        if self.model is None:
+            raise ValueError("Model not initialized. Call prepare_data() first.")
+        
         out = {}
         self.model.eval()
         
@@ -105,6 +117,12 @@ class Trainer:
     
     def train(self) -> None:
         """Train the model."""
+        if self.model is None:
+            raise ValueError("Model not initialized. Call prepare_data() first.")
+        
+        if self.optimizer is None:
+            raise ValueError("Optimizer not initialized. Call prepare_data() first.")
+        
         print("Starting training")
         print(f"Device: {self.device}")
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")

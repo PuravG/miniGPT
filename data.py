@@ -55,16 +55,6 @@ class Vocabulary:
             Decoded string.
         """
         return ''.join([self.itos[i] for i in indices])
-    
-    @property
-    def encode_func(self) -> Callable[[str], List[int]]:
-        """Return encode function for backward compatibility."""
-        return self.encode
-    
-    @property
-    def decode_func(self) -> Callable[[List[int]], str]:
-        """Return decode function for backward compatibility."""
-        return self.decode
 
 
 class DataLoader:
@@ -170,71 +160,3 @@ class DataLoader:
         y = torch.stack([data[i+1:i+1+max_context] for i in ix])
         
         return x, y
-
-
-# Backward compatibility functions
-def download_data(file_path: str) -> Optional[str]:
-    """
-    Download the Data to train the Model (backward compatibility).
-    
-    Args:
-        file_path: Path to the data file.
-        
-    Returns:
-        Path to the data file if successful, None otherwise.
-    """
-    from config import DataConfig
-    config = DataConfig(text_path=file_path)
-    loader = DataLoader(config)
-    result = loader.download_data()
-    return str(result) if result else None
-
-
-def load_data(
-    file_path: str,
-    train_ratio: float
-) -> Tuple[torch.Tensor, torch.Tensor, Callable[[str], List[int]], Callable[[List[int]], str]]:
-    """
-    Load the data from the file_path, process it, encode it and then return the train and val split.
-    (backward compatibility)
-    
-    Args:
-        file_path: Path to the data file.
-        train_ratio: Ratio of data to use for training.
-        
-    Returns:
-        Tuple of (train_data, val_data, encode_function, decode_function).
-    """
-    from config import DataConfig
-    config = DataConfig(text_path=file_path, train_ratio=train_ratio)
-    loader = DataLoader(config)
-    train_data, val_data, vocab = loader.load_data()
-    return train_data, val_data, vocab.encode_func, vocab.decode_func
-
-
-def sample_batch(
-    train_data: torch.Tensor,
-    val_data: torch.Tensor,
-    split: str,
-    MAX_CONTEXT: int,
-    BATCH_SIZE: int
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Sample a batch from our dataset for training or validation (backward compatibility).
-    
-    Args:
-        train_data: Training data tensor.
-        val_data: Validation data tensor.
-        split: Either 'train' or 'val'.
-        MAX_CONTEXT: Maximum context length.
-        BATCH_SIZE: Batch size.
-        
-    Returns:
-        Tuple of (input_tensor, target_tensor).
-    """
-    from config import DataConfig
-    config = DataConfig()
-    loader = DataLoader(config)
-    loader.train_data = train_data
-    loader.val_data = val_data
-    return loader.sample_batch(split, MAX_CONTEXT, BATCH_SIZE)
